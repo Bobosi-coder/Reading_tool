@@ -34,21 +34,18 @@ final class ReaderScheme: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
         guard let url = urlSchemeTask.request.url else { return }
         let path = url.path
-        let fileURL: URL
+        var fileURL: URL?
         if path.hasPrefix("/book/") {
-            fileURL = bookFolder.appendingPathComponent(String(path.dropFirst("/book/".count)))
+            let candidate = bookFolder.appendingPathComponent(String(path.dropFirst("/book/".count)))
+            // Stay inside the book folder.
+            if candidate.standardizedFileURL.path.hasPrefix(bookFolder.standardizedFileURL.path) {
+                fileURL = candidate
+            }
         } else if path.hasPrefix("/_fonts/") {
-            fileURL = FontManager.fontsDirectory.appendingPathComponent(String(path.dropFirst("/_fonts/".count)))
-        } else {
-            fail(urlSchemeTask, url: url)
-            return
+            // Only files the font manager knows about (bundled or imported).
+            fileURL = FontManager.shared.url(forFile: String(path.dropFirst("/_fonts/".count)))
         }
-
-        // Stay inside the allowed folders.
-        let resolved = fileURL.standardizedFileURL.path
-        guard resolved.hasPrefix(bookFolder.standardizedFileURL.path) ||
-              resolved.hasPrefix(FontManager.fontsDirectory.standardizedFileURL.path),
-              let data = try? Data(contentsOf: fileURL) else {
+        guard let fileURL, let data = try? Data(contentsOf: fileURL) else {
             fail(urlSchemeTask, url: url)
             return
         }

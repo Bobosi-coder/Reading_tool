@@ -45,6 +45,18 @@ enum ReaderTheme: String, CaseIterable, Identifiable {
     var isDark: Bool { self == .dark }
 }
 
+enum PageTurnStyle: String, CaseIterable, Identifiable {
+    case curl, slide, none
+    var id: String { rawValue }
+    var name: String {
+        switch self {
+        case .curl: "仿真"
+        case .slide: "滑动"
+        case .none: "无"
+        }
+    }
+}
+
 /// All typography + theme preferences, persisted in UserDefaults.
 @Observable
 final class ReaderSettings {
@@ -64,10 +76,14 @@ final class ReaderSettings {
     var textIndent: Bool { didSet { d.set(textIndent, forKey: "textIndent") } }
     var justify: Bool { didSet { d.set(justify, forKey: "justify") } }
     var theme: ReaderTheme { didSet { d.set(theme.rawValue, forKey: "theme") } }
+    var pageTurn: PageTurnStyle { didSet { d.set(pageTurn.rawValue, forKey: "pageTurn") } }
+
+    static let defaultLatin = "Literata"
+    static let defaultCJK = "LXGW WenKai"
 
     private init() {
-        latinFont = d.string(forKey: "latinFont") ?? ""
-        cjkFont = d.string(forKey: "cjkFont") ?? ""
+        latinFont = d.string(forKey: "latinFont") ?? Self.defaultLatin
+        cjkFont = d.string(forKey: "cjkFont") ?? Self.defaultCJK
         fontSize = d.object(forKey: "fontSize") as? Double ?? 19
         lineHeight = d.object(forKey: "lineHeight") as? Double ?? 1.75
         letterSpacing = d.object(forKey: "letterSpacing") as? Double ?? 0.02
@@ -76,16 +92,20 @@ final class ReaderSettings {
         textIndent = d.object(forKey: "textIndent") as? Bool ?? true
         justify = d.object(forKey: "justify") as? Bool ?? true
         theme = ReaderTheme(rawValue: d.string(forKey: "theme") ?? "") ?? .sepia
+        pageTurn = PageTurnStyle(rawValue: d.string(forKey: "pageTurn") ?? "") ?? .curl
     }
 
     /// CSS font-family value: Latin first so English uses it, CJK falls through.
     var fontFamilyCSS: String {
         var parts: [String] = []
-        if !latinFont.isEmpty { parts.append(cssQuote(latinFont)) }
-        if !cjkFont.isEmpty { parts.append(cssQuote(cjkFont)) }
-        parts.append("-apple-system")
+        if !cjkFont.isEmpty { parts.append("\"\(FontManager.cjkAlias)\"") }
+        if !latinFont.isEmpty {
+            parts.append(latinFont == FontManager.newYork ? "ui-serif" : cssQuote(latinFont))
+        }
+        if !cjkFont.isEmpty && cjkFont != latinFont { parts.append(cssQuote(cjkFont)) }
+        // Named CJK fallbacks: generic system families can fall through to blank glyphs.
         parts.append("\"PingFang SC\"")
-        parts.append("sans-serif")
+        parts.append("serif")
         return parts.joined(separator: ", ")
     }
 

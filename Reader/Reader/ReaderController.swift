@@ -3,16 +3,44 @@ import WebKit
 import Observation
 
 enum AIQuickAction: String {
-    case ask, explain, translate
+    case ask, translateExplain
+
+    var title: String {
+        switch self {
+        case .ask: "问 AI"
+        case .translateExplain: "译 · 释"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .ask: "sparkles"
+        case .translateExplain: "character.bubble"
+        }
+    }
+
+    /// Short label shown in the chat bubble.
+    var label: String {
+        switch self {
+        case .ask: "这段话讲的是什么意思？"
+        case .translateExplain: "翻译并解释"
+        }
+    }
 
     var prompt: String {
         switch self {
         case .ask: "这段话讲的是什么意思？"
-        case .explain: "请解释这段话里的难点（词语、典故、背景、逻辑），并用通俗的话概括。"
-        case .translate: "请翻译这段文字（中文译成英文，其他语言译成中文），并简要说明关键表达。"
+        case .translateExplain: """
+            请先翻译，再解释：
+            1. **翻译**：英文（或其他外语）译成自然流畅的中文；中文译成英文。
+            2. **解释**：挑出难词、短语和习语（英文词附音标与词性），拆解长难句的语法结构，并补充理解所需的背景。
+            用 **翻译** 和 **解释** 两个小标题分段，简洁清楚。
+            """
         }
     }
 }
+
+enum TurnDirection { case forward, backward }
 
 struct SelectionPayload: Identifiable {
     let id = UUID()
@@ -28,6 +56,8 @@ final class ReaderController: NSObject {
     let epub: EPUBBook
     let bookFolder: URL
     let webView: PagingWebView
+    /// Hosts the web view plus the snapshot layer used for page-turn animations.
+    let container: ReaderContainerView
 
     private(set) var spineIndex: Int = 0
     private(set) var page: Int = 0
@@ -42,6 +72,8 @@ final class ReaderController: NSObject {
     private let scheme: ReaderScheme
     @ObservationIgnored private var pendingTarget: (progress: Double, fragment: String?) = (0, nil)
     @ObservationIgnored private var appliedSignature = ""
+    @ObservationIgnored private var turnInFlight: TurnDirection?
+    @ObservationIgnored private var turnTimeout: DispatchWorkItem?
 
     init(epub: EPUBBook, bookFolder: URL) {
         self.epub = epub
@@ -56,6 +88,7 @@ final class ReaderController: NSObject {
         config.userContentController = ucc
 
         webView = PagingWebView(frame: .zero, configuration: config)
+        container = ReaderContainerView(webView: webView)
         super.init()
 
         ucc.add(WeakMessageHandler(self), name: "reader")
@@ -107,8 +140,60 @@ final class ReaderController: NSObject {
         open(spineIndex: i, fragment: tocEntry.fragment)
     }
 
-    func nextPage() { webView.evaluateJavaScript("window.reader && reader.next()") }
-    func prevPage() { webView.evaluateJavaScript("window.reader && reader.prev()") }
+    func nextPage() { turn(.forward) }
+    func prevPage() { turn(.backward) }
+
+    // MARK: - Page turning
+
+    private var atBookStart: Bool { spineIndex == 0 && page == 0 }
+    private var atBookEnd: Bool { spineIndex >= epub.spine.count - 1 && page >= pageCount - 1 }
+
+    private func turnJS(_ dir: TurnDirection) {
+        webView.evaluateJavaScript(dir == .forward ? "window.reader && reader.next()" : "window.reader && reader.prev()")
+    }
+
+    /// Snapshot the current page, move the content, then animate from the snapshot to the new page.
+    func turn(_ dir: TurnDirection) {
+        guard turnInFlight == nil else { return }
+        if (dir == .forward && atBookEnd) || (dir == .backward && atBookStart) { return }
+        let style = ReaderSettings.shared.pageTurn
+        guard style != .none else { turnJS(dir); return }
+
+        turnInFlight = dir
+        webView.takeSnapshot(with: nil) { [weak self] image, _ in
+            guard let self else { return }
+            guard let image else { self.turnInFlight = nil; self.turnJS(dir); return }
+            self.container.showSnapshot(image)
+            self.turnJS(dir)
+            let timeout = DispatchWorkItem { [weak self] in self?.finishTurn() }
+            self.turnTimeout = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: timeout)
+        }
+    }
+
+    /// Called once the web view reports the new position.
+    private func completeTurn(chapterChanged: Bool) {
+        guard let dir = turnInFlight else { return }
+        let delay = chapterChanged ? 0.12 : 0.04
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.webView.takeSnapshot(with: nil) { [weak self] image, _ in
+                guard let self else { return }
+                guard let image else { self.finishTurn(); return }
+                self.turnTimeout?.cancel()
+                self.container.animate(to: image, direction: dir, style: ReaderSettings.shared.pageTurn) { [weak self] in
+                    self?.finishTurn()
+                }
+            }
+        }
+    }
+
+    private func finishTurn() {
+        turnTimeout?.cancel()
+        turnTimeout = nil
+        turnInFlight = nil
+        container.hideSnapshot()
+    }
 
     func nextChapter() {
         if spineIndex + 1 < epub.spine.count { open(spineIndex: spineIndex + 1) }
@@ -118,8 +203,8 @@ final class ReaderController: NSObject {
         if spineIndex > 0 { open(spineIndex: spineIndex - 1, progress: atEnd ? 1 : 0) }
     }
 
-    @objc private func swipeLeft() { nextPage() }
-    @objc private func swipeRight() { prevPage() }
+    @objc private func swipeLeft() { turn(.forward) }
+    @objc private func swipeRight() { turn(.backward) }
 
     // MARK: - Styling
 
@@ -156,6 +241,8 @@ final class ReaderController: NSObject {
                   let text = obj["text"] as? String, !text.isEmpty else { return }
             let ctx = obj["context"] as? String ?? ""
             self.askPayload = SelectionPayload(text: text, context: ctx, action: action, chapterTitle: self.chapterTitle)
+            self.webView.evaluateJavaScript("window.reader && reader.clearSelection()")
+            self.hasSelection = false
         }
     }
 }
@@ -181,7 +268,7 @@ extension ReaderController: WKNavigationDelegate {
             let fragment = url.fragment
             if let i = epub.spineIndex(forPath: path) {
                 if i == spineIndex, let fragment {
-                    webView.evaluateJavaScript("reader.goToElement(\"\(fragment.replacingOccurrences(of: "\"", with: ""))\")")
+                    webView.evaluateJavaScript("reader.moved = true; reader.goToElement(\"\(fragment.replacingOccurrences(of: "\"", with: ""))\")")
                 } else {
                     open(spineIndex: i, fragment: fragment)
                 }
@@ -203,12 +290,17 @@ extension ReaderController: WKScriptMessageHandler {
             pageCount = max(1, body["count"] as? Int ?? 1)
             let progress = Double(page) / Double(pageCount)
             onPositionChange?(spineIndex, progress)
+            if turnInFlight != nil { completeTurn(chapterChanged: body["start"] as? Bool ?? false) }
         case "nextChapter":
             nextChapter()
         case "prevChapter":
             prevChapter()
-        case "toggleChrome":
-            withAnimation(.easeInOut(duration: 0.2)) { showChrome.toggle() }
+        case "tap":
+            switch body["zone"] as? String {
+            case "left": turn(.backward)
+            case "right": turn(.forward)
+            default: withAnimation(.easeInOut(duration: 0.25)) { showChrome.toggle() }
+            }
         case "selection":
             hasSelection = !((body["text"] as? String) ?? "").isEmpty
         default:
@@ -226,17 +318,15 @@ final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// WKWebView with "问 AI / 解释 / 翻译" added to the text-selection menu.
+/// WKWebView with "问 AI" and "译 · 释" added to the text-selection menu.
 final class PagingWebView: WKWebView {
     var onAIAction: ((AIQuickAction) -> Void)?
 
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
-        let actions: [UIAction] = [
-            UIAction(title: "问 AI", image: UIImage(systemName: "sparkles")) { [weak self] _ in self?.onAIAction?(.ask) },
-            UIAction(title: "解释", image: UIImage(systemName: "text.magnifyingglass")) { [weak self] _ in self?.onAIAction?(.explain) },
-            UIAction(title: "翻译", image: UIImage(systemName: "character.book.closed")) { [weak self] _ in self?.onAIAction?(.translate) },
-        ]
+        let actions: [UIAction] = [AIQuickAction.ask, .translateExplain].map { action in
+            UIAction(title: action.title, image: UIImage(systemName: action.symbol)) { [weak self] _ in self?.onAIAction?(action) }
+        }
         let menu = UIMenu(title: "", identifier: UIMenu.Identifier("reader.ai"), options: .displayInline, children: actions)
         if builder.menu(for: .standardEdit) != nil {
             builder.insertSibling(menu, beforeMenu: .standardEdit)
@@ -246,9 +336,74 @@ final class PagingWebView: WKWebView {
     }
 }
 
+/// The web view with a snapshot image on top, used to play page-turn transitions.
+final class ReaderContainerView: UIView {
+    let webView: WKWebView
+    private let snapshotView = UIImageView()
+
+    init(webView: WKWebView) {
+        self.webView = webView
+        super.init(frame: .zero)
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(webView)
+        snapshotView.contentMode = .scaleToFill
+        snapshotView.isHidden = true
+        snapshotView.isUserInteractionEnabled = true // swallow taps mid-animation
+        addSubview(snapshotView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            webView.topAnchor.constraint(equalTo: topAnchor),
+            webView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        snapshotView.frame = webView.frame
+    }
+
+    func showSnapshot(_ image: UIImage) {
+        snapshotView.layer.removeAllAnimations()
+        snapshotView.image = image
+        snapshotView.isHidden = false
+    }
+
+    func hideSnapshot() {
+        snapshotView.isHidden = true
+        snapshotView.image = nil
+    }
+
+    func animate(to image: UIImage, direction: TurnDirection, style: PageTurnStyle, completion: @escaping () -> Void) {
+        let t = CATransition()
+        switch style {
+        case .curl:
+            // Same page-curl transition UIKit uses for UIPageViewController.
+            t.type = CATransitionType(rawValue: direction == .forward ? "pageCurl" : "pageUnCurl")
+            t.subtype = direction == .forward ? .fromRight : .fromRight
+            t.duration = 0.55
+        case .slide, .none:
+            t.type = .push
+            t.subtype = direction == .forward ? .fromRight : .fromLeft
+            t.duration = 0.32
+        }
+        #if DEBUG
+        if let slow = ProcessInfo.processInfo.environment["TURN_DURATION"].flatMap(Double.init) { t.duration = slow }
+        #endif
+        t.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        CATransaction.begin()
+        CATransaction.setCompletionBlock(completion)
+        snapshotView.layer.add(t, forKey: "turn")
+        snapshotView.image = image
+        CATransaction.commit()
+    }
+}
+
 struct ReaderWebView: UIViewRepresentable {
     let controller: ReaderController
 
-    func makeUIView(context: Context) -> PagingWebView { controller.webView }
-    func updateUIView(_ uiView: PagingWebView, context: Context) {}
+    func makeUIView(context: Context) -> ReaderContainerView { controller.container }
+    func updateUIView(_ uiView: ReaderContainerView, context: Context) {}
 }

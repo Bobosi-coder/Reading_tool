@@ -18,8 +18,10 @@
 		5C29DD59E6EDF25618E27707 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116FF64414D6F44BC8F1B1EF /* LibraryView.swift */; };
 		678748A95D0099D8C9991835 /* ReaderController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD7575DA2068A2096D202C86 /* ReaderController.swift */; };
 		7F89D0485D71EE1896CD8587 /* EPUBParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB39B2F36747BD4507D751C /* EPUBParser.swift */; };
+		88784925CBDC262FD55B64EF /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = 00D409462A957E65932F720B /* Fonts */; };
 		8F13C4AA1826D45FD3381998 /* ReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC78EBA5D4D02903E4BD248A /* ReaderApp.swift */; };
 		939ED04F36963FB7F3B48A03 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A59C8116DE0176BFAA9C288 /* Assets.xcassets */; };
+		98CB6BCF93A566833E6915DC /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9147BBC219498FE4166C2E19 /* DesignSystem.swift */; };
 		A349DF68D63EDDCBBB946D15 /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B4388C7568893B2BF8FADBE /* Book.swift */; };
 		A441BFAD57EAE6305BBD6174 /* ReaderScheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FD1B874BF3914F66A8ACE7E /* ReaderScheme.swift */; };
 		C83E026B508F3FF8B8044F34 /* XMLTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCC2CAE894F7A2F2DD0BDA1E /* XMLTree.swift */; };
@@ -29,6 +31,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		00D409462A957E65932F720B /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Fonts; path = Reader/Resources/Fonts; sourceTree = SOURCE_ROOT; };
 		116FF64414D6F44BC8F1B1EF /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		1A59C8116DE0176BFAA9C288 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		20C9C562B4186937BEBE697A /* FontCollection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontCollection.swift; sourceTree = "<group>"; };
@@ -41,6 +44,7 @@
 		7CDAE56CC3D05532D114783C /* BookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookStore.swift; sourceTree = "<group>"; };
 		7D1BE4C99722DBE37CC537AA /* Reader.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Reader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7FD1B874BF3914F66A8ACE7E /* ReaderScheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderScheme.swift; sourceTree = "<group>"; };
+		9147BBC219498FE4166C2E19 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		952EEB2BEF90ABE507E02BF3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		BCC2CAE894F7A2F2DD0BDA1E /* XMLTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMLTree.swift; sourceTree = "<group>"; };
 		CD7575DA2068A2096D202C86 /* ReaderController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderController.swift; sourceTree = "<group>"; };
@@ -63,6 +67,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		013D938FF816A3CF91BDCE0D /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				00D409462A957E65932F720B /* Fonts */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		27BBDDC61DF3A3F80C862607 /* Models */ = {
 			isa = PBXGroup;
 			children = (
@@ -95,6 +107,7 @@
 				9D4B0F63B830954FBE51CDD9 /* Library */,
 				27BBDDC61DF3A3F80C862607 /* Models */,
 				609712F69F467D4EE49E218C /* Reader */,
+				013D938FF816A3CF91BDCE0D /* Resources */,
 			);
 			path = Reader;
 			sourceTree = "<group>";
@@ -110,6 +123,7 @@
 		923A5E1F57832A2B76470772 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				9147BBC219498FE4166C2E19 /* DesignSystem.swift */,
 				EC78EBA5D4D02903E4BD248A /* ReaderApp.swift */,
 			);
 			path = App;
@@ -226,6 +240,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				939ED04F36963FB7F3B48A03 /* Assets.xcassets in Resources */,
+				88784925CBDC262FD55B64EF /* Fonts in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -240,6 +255,7 @@
 				01FB8B6099AFB4C0FE99B146 /* AskAIView.swift in Sources */,
 				A349DF68D63EDDCBBB946D15 /* Book.swift in Sources */,
 				0212F0DBB35C1B4E63A27C0C /* BookStore.swift in Sources */,
+				98CB6BCF93A566833E6915DC /* DesignSystem.swift in Sources */,
 				7F89D0485D71EE1896CD8587 /* EPUBParser.swift in Sources */,
 				DA4B81890196B0B3B9CB9DA9 /* FontCollection.swift in Sources */,
 				2DEE7A04EFFE654CD20BA5E2 /* FontManager.swift in Sources */,
@@ -382,6 +398,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -401,6 +418,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = NO;

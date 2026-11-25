@@ -5,7 +5,6 @@ struct ReaderView: View {
     let book: Book
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var context
     @Environment(ReaderSettings.self) private var settings
 
     @State private var controller: ReaderController?
@@ -21,7 +20,7 @@ struct ReaderView: View {
             if let controller {
                 readerBody(controller)
             } else if let loadError {
-                VStack(spacing: 12) {
+                VStack(spacing: 14) {
                     Text(loadError).foregroundStyle(settings.theme.fgColor)
                     Button("返回") { dismiss() }
                 }
@@ -37,16 +36,18 @@ struct ReaderView: View {
 
     @ViewBuilder
     private func readerBody(_ c: ReaderController) -> some View {
+        let fg = settings.theme.fgColor
         ZStack {
             ReaderWebView(controller: c)
                 .ignoresSafeArea(edges: .bottom)
 
-            // Running header / footer (always visible, subtle).
+            // Running header / footer.
             VStack {
                 Text(c.chapterTitle.isEmpty ? book.title : c.chapterTitle)
-                    .font(.caption)
+                    .font(DS.serif(12))
+                    .tracking(0.5)
                     .lineLimit(1)
-                    .padding(.horizontal, 40)
+                    .padding(.horizontal, 60)
                     .padding(.top, 14)
                 Spacer()
                 HStack {
@@ -54,109 +55,162 @@ struct ReaderView: View {
                     Spacer()
                     Text("\(Int(c.totalProgress * 100))%")
                 }
-                .font(.caption2.monospacedDigit())
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
                 .padding(.horizontal, 40)
                 .padding(.bottom, 10)
             }
-            .foregroundStyle(settings.theme.fgColor.opacity(0.45))
+            .foregroundStyle(fg.opacity(0.4))
             .allowsHitTesting(false)
+            .opacity(c.showChrome ? 0 : 1)
 
             if c.showChrome { chrome(c) }
 
-            if showAI { aiPanel(c) }
+            if c.hasSelection && !showAI { selectionBar(c) }
 
-            // Floating shortcut when text is selected (in case the edit menu is dismissed).
-            if c.hasSelection && !showAI {
-                VStack {
-                    Spacer()
-                    Button {
-                        c.requestAI(.ask)
-                    } label: {
-                        Label("问 AI", systemImage: "sparkles")
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 18).padding(.vertical, 10)
-                            .background(.thinMaterial, in: Capsule())
-                    }
-                    .padding(.bottom, 36)
-                }
-                .transition(.opacity)
-            }
+            if showAI { aiPanel(c) }
         }
+        .animation(.easeInOut(duration: 0.22), value: c.showChrome)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: c.hasSelection)
         .sheet(isPresented: $showTOC) {
-            TOCView(epub: c.epub, currentIndex: c.spineIndex) { entry in
+            TOCView(epub: c.epub, bookTitle: book.title, currentIndex: c.spineIndex) { entry in
                 c.open(tocEntry: entry)
                 showTOC = false
                 c.showChrome = false
             }
+            .presentationDetents([.large])
         }
         .onChange(of: c.askPayload?.id) {
             if c.askPayload != nil {
-                withAnimation(.easeOut(duration: 0.25)) { showAI = true }
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { showAI = true }
             }
         }
     }
 
-    /// Slide-over panel on the right; the page underneath keeps its layout.
+    // MARK: - Chrome
+
+    @ViewBuilder
+    private func chrome(_ c: ReaderController) -> some View {
+        VStack {
+            HStack(spacing: 12) {
+                GlassIconButton(systemName: "chevron.backward") { dismiss() }
+                Spacer()
+                VStack(spacing: 2) {
+                    Text(book.title).font(DS.serif(15, .semibold)).lineLimit(1)
+                    if !c.chapterTitle.isEmpty {
+                        Text(c.chapterTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 18).padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                Spacer()
+                HStack(spacing: 4) {
+                    toolButton("list.bullet") { showTOC = true }
+                    toolButton("textformat.size") { showStyle.toggle() }
+                        .popover(isPresented: $showStyle, arrowEdge: .top) {
+                            TypographyView()
+                                .frame(width: 400, height: 640)
+                                .presentationCompactAdaptation(.popover)
+                        }
+                    toolButton("sparkles") {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { showAI.toggle() }
+                    }
+                }
+                .padding(4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+
+            Spacer()
+
+            HStack(spacing: 14) {
+                toolButton("chevron.left.2") { c.prevChapter(atEnd: false) }
+                    .disabled(c.spineIndex == 0)
+                VStack(spacing: 6) {
+                    ThinProgress(value: c.totalProgress, height: 3)
+                    HStack {
+                        Text("第 \(c.spineIndex + 1) / \(c.epub.spine.count) 节")
+                        Spacer()
+                        Text("本章剩 \(max(0, c.pageCount - c.page - 1)) 页")
+                    }
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+                toolButton("chevron.right.2") { c.nextChapter() }
+                    .disabled(c.spineIndex >= c.epub.spine.count - 1)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
+            .frame(maxWidth: 520)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 20)
+        }
+        .foregroundStyle(DS.ink)
+        .transition(.opacity)
+    }
+
+    private func toolButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    // MARK: - Selection actions
+
+    private func selectionBar(_ c: ReaderController) -> some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 0) {
+                selectionButton(.ask, c)
+                Rectangle().fill(DS.hairline).frame(width: 1, height: 22)
+                selectionButton(.translateExplain, c)
+            }
+            .padding(.horizontal, 6)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().stroke(DS.hairline.opacity(0.7), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.15), radius: 16, y: 6)
+            .padding(.bottom, 40)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func selectionButton(_ action: AIQuickAction, _ c: ReaderController) -> some View {
+        Button { c.requestAI(action) } label: {
+            Label(action.title, systemImage: action.symbol)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 18).padding(.vertical, 12)
+                .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    // MARK: - AI panel
+
     private func aiPanel(_ c: ReaderController) -> some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
-                Color.black.opacity(0.08)
+                Color.black.opacity(0.12)
                     .contentShape(Rectangle())
-                    .onTapGesture { withAnimation(.easeIn(duration: 0.2)) { showAI = false } }
-                VStack(spacing: 0) {
-                    HStack {
-                        Spacer()
-                        Button { withAnimation(.easeIn(duration: 0.2)) { showAI = false } } label: {
-                            Image(systemName: "xmark.circle.fill").font(.title2).foregroundStyle(.secondary)
-                        }
-                        .padding([.top, .trailing], 12)
-                    }
-                    AskAIView(bookTitle: book.title, author: book.author, payload: c.askPayload)
-                }
-                .frame(width: min(440, max(340, geo.size.width * 0.55)))
-                .background(.regularMaterial)
-                .shadow(color: .black.opacity(0.2), radius: 12, x: -2)
+                    .onTapGesture { closeAI() }
+                AskAIView(bookTitle: book.title, author: book.author, payload: c.askPayload, onClose: closeAI)
+                    .frame(width: min(460, max(360, geo.size.width * 0.56)))
+                    .background(DS.paper)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 28, bottomLeadingRadius: 28, style: .continuous))
+                    .shadow(color: .black.opacity(0.18), radius: 24, x: -4)
             }
         }
         .ignoresSafeArea(edges: [.top, .bottom])
         .transition(.move(edge: .trailing))
     }
 
-    @ViewBuilder
-    private func chrome(_ c: ReaderController) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 22) {
-                Button { dismiss() } label: { Image(systemName: "chevron.backward") }
-                Text(book.title).font(.headline).lineLimit(1)
-                Spacer()
-                Button { showTOC = true } label: { Image(systemName: "list.bullet") }
-                Button { showStyle.toggle() } label: { Image(systemName: "textformat.size") }
-                    .popover(isPresented: $showStyle) {
-                        TypographyView()
-                            .frame(width: 380, height: 620)
-                            .presentationCompactAdaptation(.popover)
-                    }
-                Button { showAI.toggle() } label: { Image(systemName: "sparkles") }
-            }
-            .font(.title3)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(.bar)
-
-            Spacer()
-
-            HStack(spacing: 16) {
-                Button { c.prevChapter(atEnd: false) } label: { Image(systemName: "backward.end") }
-                    .disabled(c.spineIndex == 0)
-                ProgressView(value: c.totalProgress)
-                Button { c.nextChapter() } label: { Image(systemName: "forward.end") }
-                    .disabled(c.spineIndex >= c.epub.spine.count - 1)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 14)
-            .background(.bar)
-        }
-        .transition(.opacity)
+    private func closeAI() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) { showAI = false }
     }
 
     private func load() {
@@ -181,6 +235,7 @@ struct ReaderView: View {
 
 struct TOCView: View {
     let epub: EPUBBook
+    let bookTitle: String
     let currentIndex: Int
     let onSelect: (TOCEntry) -> Void
 
@@ -188,22 +243,32 @@ struct TOCView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 List(epub.toc) { entry in
-                    let isCurrent = epub.spineIndex(forPath: entry.path) == currentIndex
+                    let isCurrent = epub.spineIndex(forPath: entry.path) == currentIndex && entry.level == 0
                     Button { onSelect(entry) } label: {
-                        Text(entry.title)
-                            .padding(.leading, CGFloat(entry.level) * 18)
-                            .fontWeight(isCurrent ? .semibold : .regular)
-                            .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
+                        HStack(spacing: 10) {
+                            if isCurrent {
+                                Capsule().fill(Color.accentColor).frame(width: 3, height: 18)
+                            }
+                            Text(entry.title)
+                                .font(entry.level == 0 ? DS.serif(17, isCurrent ? .semibold : .regular) : .subheadline)
+                                .foregroundStyle(isCurrent ? Color.accentColor : (entry.level == 0 ? DS.ink : DS.inkSoft))
+                        }
+                        .padding(.leading, CGFloat(entry.level) * 20)
+                        .padding(.vertical, 4)
                     }
+                    .listRowBackground(Color.clear)
                     .id(entry.id)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(DS.paper)
                 .onAppear {
                     if let e = epub.toc.last(where: { (epub.spineIndex(forPath: $0.path) ?? .max) <= currentIndex }) {
                         proxy.scrollTo(e.id, anchor: .center)
                     }
                 }
             }
-            .navigationTitle("目录")
+            .navigationTitle(bookTitle)
             .navigationBarTitleDisplayMode(.inline)
         }
     }

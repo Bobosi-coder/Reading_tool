@@ -37,7 +37,7 @@ enum ReaderJS {
       })();
 
       var R = {
-        page: 0, count: 1, W: 0, ready: false,
+        page: 0, count: 1, W: 0, ready: false, target: null, moved: false,
         cfg: { margin: 36, top: 48, bottom: 52 },
 
         ensureStyleLast: function(){
@@ -73,53 +73,63 @@ enum ReaderJS {
           R.count = Math.max(1, Math.ceil((sw - 2) / W));
         },
 
-        goTo: function(p){
+        goTo: function(p, isStart){
           R.page = Math.max(0, Math.min(R.count - 1, p));
           window.scrollTo(R.page * R.W, 0);
-          post({ type: 'position', page: R.page, count: R.count });
+          post({ type: 'position', page: R.page, count: R.count, start: !!isStart });
         },
         next: function(){
+          R.moved = true;
           if (R.page < R.count - 1) R.goTo(R.page + 1); else post({ type: 'nextChapter' });
         },
         prev: function(){
+          R.moved = true;
           if (R.page > 0) R.goTo(R.page - 1); else post({ type: 'prevChapter' });
         },
-        goToProgress: function(p){
-          if (p >= 1) { R.goTo(R.count - 1); return; }
-          R.goTo(Math.floor(p * R.count + 1e-6));
+        goToProgress: function(p, isStart){
+          if (p >= 1) { R.goTo(R.count - 1, isStart); return; }
+          R.goTo(Math.floor(p * R.count + 1e-6), isStart);
         },
-        goToElement: function(id){
+        goToElement: function(id, isStart){
           var el = document.getElementById(id);
           if (!el) { var n = document.getElementsByName(id); el = n && n[0]; }
-          if (!el) { R.goTo(0); return; }
+          if (!el) { R.goTo(0, isStart); return; }
           var left = el.getBoundingClientRect().left + window.scrollX;
-          R.goTo(Math.floor(left / R.W));
+          R.goTo(Math.floor(left / R.W), isStart);
         },
         progress: function(){ return R.count > 0 ? R.page / R.count : 0; },
+        // Re-paginate (fonts loaded, settings or size changed) without drifting:
+        // before the reader moves, return to the original target; afterwards keep
+        // the middle of the current page in view.
         relayout: function(){
-          var p = R.progress();
+          if (!R.moved && R.target) {
+            R.layout();
+            if (R.target.fragment) R.goToElement(R.target.fragment);
+            else R.goToProgress(R.target.progress || 0);
+            return;
+          }
+          var mid = R.count > 0 ? (R.page + 0.5) / R.count : 0;
           R.layout();
-          R.goToProgress(p);
+          R.goTo(Math.min(R.count - 1, Math.floor(mid * R.count)));
         },
         reveal: function(){
           var h = document.getElementById('__reader_hide');
           if (h) h.remove();
         },
         start: function(target){
+          R.target = target || { progress: 0 };
+          R.moved = false;
           R.ensureStyleLast();
           var go = function(){
             R.layout();
-            if (target && target.fragment) R.goToElement(target.fragment);
-            else R.goToProgress(target ? target.progress : 0);
             R.ready = true;
             R.reveal();
+            if (target && target.fragment) R.goToElement(target.fragment, true);
+            else R.goToProgress(target ? target.progress : 0, true);
           };
           go();
           if (document.fonts && document.fonts.ready) {
-            document.fonts.ready.then(function(){
-              if (target && target.fragment) { R.layout(); R.goToElement(target.fragment); }
-              else R.relayout();
-            });
+            document.fonts.ready.then(function(){ R.relayout(); });
           }
         },
         applyStyle: function(css){
@@ -172,9 +182,7 @@ enum ReaderJS {
         var s = window.getSelection();
         if (hadSelectionAtTouch || (s && !s.isCollapsed)) { hadSelectionAtTouch = false; return; }
         var x = e.clientX, W = window.innerWidth;
-        if (x < W * 0.28) R.prev();
-        else if (x > W * 0.72) R.next();
-        else post({ type: 'toggleChrome' });
+        post({ type: 'tap', zone: x < W * 0.28 ? 'left' : (x > W * 0.72 ? 'right' : 'center') });
       }, true);
 
       var selTimer = null;
@@ -221,7 +229,7 @@ enum ReaderJS {
     static func styleCSS(settings s: ReaderSettings, fonts: FontManager) -> String {
         let t = s.theme
         let families = [s.latinFont, s.cjkFont].filter { !$0.isEmpty }
-        let faces = fonts.fontFaceCSS(families: families)
+        let faces = fonts.fontFaceCSS(families: families) + "\n" + fonts.cjkAliasCSS(family: s.cjkFont)
         let fontRule = s.overridesFont ? """
         html, body, body *:not(pre):not(code):not(kbd):not(samp):not(tt) {
           font-family: \(s.fontFamilyCSS) !important;
