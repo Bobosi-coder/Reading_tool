@@ -29,9 +29,11 @@ struct ReaderView: View {
             }
         }
         .preferredColorScheme(settings.theme.isDark ? .dark : .light)
-        .statusBarHidden(!(controller?.showChrome ?? true))
+        // Keep the status bar hidden so the page never resizes (and re-flows) when toolbars appear.
+        .statusBarHidden(true)
         .task { load() }
         .onChange(of: settings.signature) { controller?.settingsChanged() }
+        .onChange(of: settings.pageTurn) { controller?.updateTurnMode() }
     }
 
     @ViewBuilder
@@ -39,7 +41,7 @@ struct ReaderView: View {
         let fg = settings.theme.fgColor
         ZStack {
             ReaderWebView(controller: c)
-                .ignoresSafeArea(edges: .bottom)
+                .ignoresSafeArea()
 
             // Running header / footer.
             VStack {
@@ -51,9 +53,13 @@ struct ReaderView: View {
                     .padding(.top, 14)
                 Spacer()
                 HStack {
-                    Text("\(c.page + 1) / \(c.pageCount)")
+                    if let bp = c.bookPages {
+                        Text("\(bp.current) / \(bp.total)")
+                    } else {
+                        Text("\(c.page + 1) / \(c.pageCount)")
+                    }
                     Spacer()
-                    Text("\(Int(c.totalProgress * 100))%")
+                    Text(c.pageCount - c.page - 1 > 0 ? "本章剩 \(c.pageCount - c.page - 1) 页" : "本章最后一页")
                 }
                 .font(.system(size: 11, weight: .medium).monospacedDigit())
                 .padding(.horizontal, 40)

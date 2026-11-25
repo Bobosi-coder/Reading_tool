@@ -5,15 +5,19 @@ enum ReaderJS {
     static func startScript(css: String) -> String {
         let cssJSON = jsonString(css)
         return """
+        window.__readerCSS = \(cssJSON);
         (function(){
+          // XHTML chapters may not have a root element yet; the runtime re-checks at document end.
+          var root = document.head || document.documentElement;
+          if (!root) return;
           var s = document.createElement('style');
           s.id = '__reader_style';
-          s.textContent = \(cssJSON);
-          (document.head || document.documentElement).appendChild(s);
+          s.textContent = window.__readerCSS;
+          root.appendChild(s);
           var h = document.createElement('style');
           h.id = '__reader_hide';
           h.textContent = 'html{visibility:hidden !important}';
-          document.documentElement.appendChild(h);
+          root.appendChild(h);
         })();
         """
     }
@@ -38,11 +42,16 @@ enum ReaderJS {
 
       var R = {
         page: 0, count: 1, W: 0, ready: false, target: null, moved: false,
-        cfg: { margin: 36, top: 48, bottom: 52 },
+        cfg: { margin: 36, top: 66, bottom: 52 },
 
         ensureStyleLast: function(){
           var s = document.getElementById('__reader_style');
-          if (s && document.head) document.head.appendChild(s);
+          if (!s) {
+            s = document.createElement('style');
+            s.id = '__reader_style';
+            s.textContent = window.__readerCSS || '';
+          }
+          (document.head || document.documentElement).appendChild(s);
         },
 
         layout: function(){
@@ -55,6 +64,7 @@ enum ReaderJS {
           html.style.setProperty('margin', '0', 'important');
           html.style.setProperty('padding', '0', 'important');
           html.style.setProperty('height', H + 'px', 'important');
+          html.style.setProperty('width', W + 'px', 'important');
           var st = b.style;
           st.setProperty('box-sizing', 'border-box', 'important');
           st.setProperty('margin', '0', 'important');
@@ -69,8 +79,12 @@ enum ReaderJS {
           var imgMax = (H - R.cfg.top - R.cfg.bottom - 4) + 'px';
           var imgs = document.querySelectorAll('img, svg, video');
           for (var i = 0; i < imgs.length; i++) imgs[i].style.setProperty('max-height', imgMax, 'important');
-          var sw = Math.max(b.scrollWidth, html.scrollWidth);
+          var sw = b.scrollWidth;
           R.count = Math.max(1, Math.ceil((sw - 2) / W));
+          // The body's right padding is not added after overflowing columns, so the document is
+          // one margin short of count*W and the last page can't scroll fully into place.
+          // Make the document exactly count pages wide.
+          html.style.setProperty('width', (R.count * W) + 'px', 'important');
         },
 
         goTo: function(p, isStart){
@@ -133,6 +147,7 @@ enum ReaderJS {
           }
         },
         applyStyle: function(css){
+          window.__readerCSS = css;
           var s = document.getElementById('__reader_style');
           if (!s) { s = document.createElement('style'); s.id = '__reader_style'; document.head.appendChild(s); }
           s.textContent = css;
@@ -169,6 +184,7 @@ enum ReaderJS {
         clearSelection: function(){ var s = window.getSelection(); if (s) s.removeAllRanges(); }
       };
       window.reader = R;
+      R.ensureStyleLast();
 
       var hadSelectionAtTouch = false;
       document.addEventListener('touchstart', function(){
@@ -198,7 +214,7 @@ enum ReaderJS {
       // content width no longer matches the page count.
       R.check = function(){
         if (!R.ready || !document.body) return;
-        var sw = Math.max(document.body.scrollWidth, document.documentElement.scrollWidth);
+        var sw = document.body.scrollWidth;
         var n = Math.max(1, Math.ceil((sw - 2) / R.W));
         if (n !== R.count) R.relayout();
       };
@@ -256,7 +272,10 @@ enum ReaderJS {
         body p, body div, body li, body blockquote, body dd, body span, body td {
           line-height: \(s.lineHeight) !important;
           color: inherit !important;
+        }
+        body *:not(img):not(svg):not(video) {
           background-color: transparent !important;
+          background-image: none !important;
         }
         body p {
           font-size: 1em !important;

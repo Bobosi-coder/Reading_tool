@@ -15,6 +15,7 @@
 		2DEE7A04EFFE654CD20BA5E2 /* FontManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 599BE75CBB11DF6F6A8EF692 /* FontManager.swift */; };
 		3D2004EE043D2119B2C12EA1 /* ReaderSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B0A8DAB93625D35FA3ABA29 /* ReaderSettings.swift */; };
 		4AB24BD22B4328865FCE3D8C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 4E62809B08F0408E5D427EE5 /* ZIPFoundation */; };
+		500CEFD0402DA949550AAFC0 /* PageCurl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ABFDC1149A99195B693724A /* PageCurl.swift */; };
 		5C29DD59E6EDF25618E27707 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116FF64414D6F44BC8F1B1EF /* LibraryView.swift */; };
 		678748A95D0099D8C9991835 /* ReaderController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD7575DA2068A2096D202C86 /* ReaderController.swift */; };
 		7F89D0485D71EE1896CD8587 /* EPUBParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB39B2F36747BD4507D751C /* EPUBParser.swift */; };
@@ -39,6 +40,7 @@
 		3CB3B64F142AAF298BD5DB14 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
 		599BE75CBB11DF6F6A8EF692 /* FontManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontManager.swift; sourceTree = "<group>"; };
 		5AB39B2F36747BD4507D751C /* EPUBParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBParser.swift; sourceTree = "<group>"; };
+		7ABFDC1149A99195B693724A /* PageCurl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageCurl.swift; sourceTree = "<group>"; };
 		7B0A8DAB93625D35FA3ABA29 /* ReaderSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSettings.swift; sourceTree = "<group>"; };
 		7BFFB0B894728250B0EEDD93 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		7CDAE56CC3D05532D114783C /* BookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookStore.swift; sourceTree = "<group>"; };
@@ -87,6 +89,7 @@
 		609712F69F467D4EE49E218C /* Reader */ = {
 			isa = PBXGroup;
 			children = (
+				7ABFDC1149A99195B693724A /* PageCurl.swift */,
 				CD7575DA2068A2096D202C86 /* ReaderController.swift */,
 				F2A0A8A54BB8CFCA2FC1C813 /* ReaderJS.swift */,
 				7FD1B874BF3914F66A8ACE7E /* ReaderScheme.swift */,
@@ -261,6 +264,7 @@
 				DA4B81890196B0B3B9CB9DA9 /* FontCollection.swift in Sources */,
 				2DEE7A04EFFE654CD20BA5E2 /* FontManager.swift in Sources */,
 				5C29DD59E6EDF25618E27707 /* LibraryView.swift in Sources */,
+				500CEFD0402DA949550AAFC0 /* PageCurl.swift in Sources */,
 				8F13C4AA1826D45FD3381998 /* ReaderApp.swift in Sources */,
 				678748A95D0099D8C9991835 /* ReaderController.swift in Sources */,
 				12C3964DED2AF11E01E92EA3 /* ReaderJS.swift in Sources */,

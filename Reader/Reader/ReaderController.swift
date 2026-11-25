@@ -52,7 +52,7 @@ struct SelectionPayload: Identifiable {
 
 /// Owns the WKWebView and drives chapter loading + pagination.
 @Observable
-final class ReaderController: NSObject {
+final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
     let epub: EPUBBook
     let bookFolder: URL
     let webView: PagingWebView
@@ -62,7 +62,9 @@ final class ReaderController: NSObject {
     private(set) var spineIndex: Int = 0
     private(set) var page: Int = 0
     private(set) var pageCount: Int = 1
-    private(set) var hasSelection = false
+    private(set) var hasSelection = false {
+        didSet { curlPan?.isEnabled = ReaderSettings.shared.pageTurn == .curl && !hasSelection }
+    }
     var showChrome = false
     var askPayload: SelectionPayload?
 
@@ -74,6 +76,24 @@ final class ReaderController: NSObject {
     @ObservationIgnored private var appliedSignature = ""
     @ObservationIgnored private var turnInFlight: TurnDirection?
     @ObservationIgnored private var turnTimeout: DispatchWorkItem?
+
+    // Interactive page curl (UIPageViewController over pre-rendered page images).
+    @ObservationIgnored private let renderer: PageRenderer
+    @ObservationIgnored private let pageVC: UIPageViewController
+    @ObservationIgnored private var curlPan: UIGestureRecognizer?
+    @ObservationIgnored private var swipes: [UISwipeGestureRecognizer] = []
+    @ObservationIgnored private var currentVC: PageImageVC?
+    @ObservationIgnored private var nextVC: PageImageVC?
+    @ObservationIgnored private var prevVC: PageImageVC?
+    @ObservationIgnored private var curlActive = false      // a curl is on screen
+    @ObservationIgnored private var curlCommitting = false  // waiting for the web view to catch up
+    @ObservationIgnored private var settleWork: DispatchWorkItem?
+
+    // Book-wide page numbers: exact counts for chapters we have laid out, estimates for the rest.
+    @ObservationIgnored private var chapterWeights: [Double] = []
+    private var measuredPages: [Int: Int] = [:]
+    @ObservationIgnored private var measuredWidth: CGFloat = 0
+    @ObservationIgnored private var settleGen = 0
 
     init(epub: EPUBBook, bookFolder: URL) {
         self.epub = epub
@@ -88,7 +108,10 @@ final class ReaderController: NSObject {
         config.userContentController = ucc
 
         webView = PagingWebView(frame: .zero, configuration: config)
-        container = ReaderContainerView(webView: webView)
+        renderer = PageRenderer(epub: epub, scheme: scheme)
+        pageVC = UIPageViewController(transitionStyle: .pageCurl, navigationOrientation: .horizontal,
+                                      options: [.spineLocation: UIPageViewController.SpineLocation.min.rawValue])
+        container = ReaderContainerView(webView: webView, renderer: renderer.webView, curlView: pageVC.view)
         super.init()
 
         ucc.add(WeakMessageHandler(self), name: "reader")
@@ -111,8 +134,74 @@ final class ReaderController: NSObject {
         right.direction = .right
         webView.addGestureRecognizer(left)
         webView.addGestureRecognizer(right)
+        swipes = [left, right]
+
+        // The page view controller's own pan drives the curl. Move it onto the container so it
+        // works while the curl view is hidden; taps stay ours (center toggles the toolbars).
+        pageVC.isDoubleSided = false
+        pageVC.dataSource = self
+        pageVC.delegate = self
+        pageVC.view.isHidden = true
+        for g in pageVC.gestureRecognizers {
+            if g is UITapGestureRecognizer {
+                g.isEnabled = false
+            } else {
+                container.addGestureRecognizer(g)
+                curlPan = g
+            }
+        }
 
         installUserScripts()
+        updateTurnMode()
+        loadChapterWeights()
+    }
+
+    /// Text volume per chapter (CJK characters count 1, others 0.5) for page estimates.
+    private func loadChapterWeights() {
+        let files = epub.spine.map { bookFolder.appendingPathComponent($0.path) }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let tag = try? NSRegularExpression(pattern: "<[^>]*>", options: [])
+            let weights: [Double] = files.map { url in
+                guard let data = try? Data(contentsOf: url), var text = String(data: data, encoding: .utf8) else { return 0 }
+                if let body = text.range(of: "<body", options: .caseInsensitive) { text = String(text[body.lowerBound...]) }
+                let stripped = tag?.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "") ?? text
+                var w = 0.0
+                for u in stripped.unicodeScalars where !CharacterSet.whitespacesAndNewlines.contains(u) {
+                    w += u.value >= 0x2E80 ? 1 : 0.5
+                }
+                return w
+            }
+            DispatchQueue.main.async { self?.chapterWeights = weights }
+        }
+    }
+
+    /// (current page, total pages) across the whole book, or nil until we can estimate.
+    var bookPages: (current: Int, total: Int)? {
+        let n = epub.spine.count
+        guard chapterWeights.count == n else { return nil }
+        var known = measuredPages
+        known[spineIndex] = pageCount
+        var w = 0.0, p = 0
+        for (i, c) in known where chapterWeights[i] > 300 {
+            w += chapterWeights[i]; p += c
+        }
+        let perPage = p > 0 ? w / Double(p) : 0
+        guard perPage > 0 else { return nil }
+        func pages(_ i: Int) -> Int {
+            if let c = known[i] { return c }
+            return max(1, Int((chapterWeights[i] / perPage).rounded()))
+        }
+        let before = (0..<spineIndex).reduce(0) { $0 + pages($1) }
+        let total = (0..<n).reduce(0) { $0 + pages($1) }
+        return (before + page + 1, max(total, before + page + 1))
+    }
+
+    /// Curl uses the interactive page view controller; slide/none use discrete swipes.
+    func updateTurnMode() {
+        let curl = ReaderSettings.shared.pageTurn == .curl
+        curlPan?.isEnabled = curl && !hasSelection
+        swipes.forEach { $0.isEnabled = !curl }
+        if curl { scheduleSettle() } else { dropNeighbors() }
     }
 
     var chapterTitle: String { epub.chapterTitle(forSpineIndex: spineIndex) }
@@ -203,6 +292,19 @@ final class ReaderController: NSObject {
         if spineIndex > 0 { open(spineIndex: spineIndex - 1, progress: atEnd ? 1 : 0) }
     }
 
+    private func tapTurn(_ dir: TurnDirection) {
+        if ReaderSettings.shared.pageTurn == .curl, !curlActive,
+           let target = dir == .forward ? nextVC : prevVC {
+            curlActive = true
+            pageVC.view.isHidden = false
+            pageVC.setViewControllers([target], direction: dir == .forward ? .forward : .reverse, animated: true) { [weak self] _ in
+                self?.commitCurl(to: target)
+            }
+        } else if !curlActive {
+            turn(dir)
+        }
+    }
+
     @objc private func swipeLeft() { turn(.forward) }
     @objc private func swipeRight() { turn(.backward) }
 
@@ -217,6 +319,7 @@ final class ReaderController: NSObject {
         ucc.removeAllUserScripts()
         ucc.addUserScript(WKUserScript(source: ReaderJS.startScript(css: currentCSS()), injectionTime: .atDocumentStart, forMainFrameOnly: true))
         ucc.addUserScript(WKUserScript(source: ReaderJS.runtime, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        renderer.install(css: currentCSS())
         appliedSignature = ReaderSettings.shared.signature
     }
 
@@ -225,9 +328,126 @@ final class ReaderController: NSObject {
         let sig = ReaderSettings.shared.signature
         guard sig != appliedSignature else { return }
         installUserScripts()
+        dropNeighbors()
+        measuredPages = [:]
         webView.backgroundColor = UIColor(ReaderSettings.shared.theme.bgColor)
+        pageVC.view.backgroundColor = UIColor(ReaderSettings.shared.theme.bgColor)
         let css = ReaderJS.jsonString(currentCSS())
         webView.evaluateJavaScript("window.reader && reader.applyStyle(\(css))")
+    }
+
+    // MARK: - Interactive curl
+
+    /// Queue page-count measurements for chapters not laid out yet (exact book page numbers).
+    private func measureRemainingChapters() {
+        let width = webView.bounds.width
+        for i in epub.spine.indices where measuredPages[i] == nil && i != spineIndex {
+            renderer.measure(spine: i) { [weak self] count in
+                guard let self, self.webView.bounds.width == width else { return }
+                self.measuredPages[i] = count
+            }
+        }
+    }
+
+    private func dropNeighbors() {
+        settleGen += 1
+        renderer.cancelAll()
+        nextVC = nil
+        prevVC = nil
+    }
+
+    /// After the page stops moving: snapshot it as the curl's current page and pre-render neighbours.
+    private func scheduleSettle() {
+        guard ReaderSettings.shared.pageTurn == .curl else { return }
+        settleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.settle() }
+        settleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func settle() {
+        guard ReaderSettings.shared.pageTurn == .curl, !curlActive, !curlCommitting else { return }
+        dropNeighbors()
+        let gen = settleGen
+        let here = PagePos(spine: spineIndex, page: page, count: pageCount)
+        webView.takeSnapshot(with: nil) { [weak self] image, _ in
+            guard let self, gen == self.settleGen, let image else { return }
+            let cur = PageImageVC(pos: here, image: image)
+            self.currentVC = cur
+            self.pageVC.setViewControllers([cur], direction: .forward, animated: false)
+
+            let next: (Int, Int)? = here.page + 1 < here.count ? (here.spine, here.page + 1)
+                : (here.spine + 1 < self.epub.spine.count ? (here.spine + 1, 0) : nil)
+            let prev: (Int, Int)? = here.page > 0 ? (here.spine, here.page - 1)
+                : (here.spine > 0 ? (here.spine - 1, -1) : nil)
+            if let next {
+                self.renderer.render(spine: next.0, page: next.1) { [weak self] img, pos in
+                    guard let self, gen == self.settleGen, let img else { return }
+                    self.nextVC = PageImageVC(pos: pos, image: img)
+                    if self.measuredPages[pos.spine] != pos.count { self.measuredPages[pos.spine] = pos.count }
+                }
+            }
+            if let prev {
+                self.renderer.render(spine: prev.0, page: prev.1) { [weak self] img, pos in
+                    guard let self, gen == self.settleGen, let img else { return }
+                    self.prevVC = PageImageVC(pos: pos, image: img)
+                    if self.measuredPages[pos.spine] != pos.count { self.measuredPages[pos.spine] = pos.count }
+                }
+            }
+            self.measureRemainingChapters()
+        }
+    }
+
+    /// Move the real web view to the page the curl landed on, then hide the curl layer.
+    private func commitCurl(to vc: PageImageVC) {
+        curlCommitting = true
+        let pos = vc.pos
+        if pos.spine == spineIndex {
+            webView.evaluateJavaScript("reader.moved = true; reader.goTo(\(pos.page))")
+        } else {
+            open(spineIndex: pos.spine, progress: pos.count > 0 ? Double(pos.page) / Double(pos.count) : 0)
+        }
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.curlCommitting else { return }
+            self.finishCurlCommit(chapterChanged: true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timeout)
+    }
+
+    private func finishCurlCommit(chapterChanged: Bool) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (chapterChanged ? 0.15 : 0.05)) { [weak self] in
+            guard let self, self.curlCommitting else { return }
+            self.curlCommitting = false
+            self.curlActive = false
+            self.pageVC.view.isHidden = true
+            self.scheduleSettle()
+        }
+    }
+
+    func pageViewController(_ pvc: UIPageViewController, viewControllerAfter vc: UIViewController) -> UIViewController? {
+        guard !curlCommitting, vc === currentVC else { return nil }
+        return nextVC
+    }
+
+    func pageViewController(_ pvc: UIPageViewController, viewControllerBefore vc: UIViewController) -> UIViewController? {
+        guard !curlCommitting, vc === currentVC else { return nil }
+        return prevVC
+    }
+
+    func pageViewController(_ pvc: UIPageViewController, willTransitionTo pending: [UIViewController]) {
+        curlActive = true
+        settleWork?.cancel()
+        pageVC.view.isHidden = false
+    }
+
+    func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool,
+                            previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+        if completed, let vc = pvc.viewControllers?.first as? PageImageVC {
+            commitCurl(to: vc)
+        } else {
+            curlActive = false
+            pageVC.view.isHidden = true
+        }
     }
 
     // MARK: - AI
@@ -288,17 +508,22 @@ extension ReaderController: WKScriptMessageHandler {
         case "position":
             page = body["page"] as? Int ?? 0
             pageCount = max(1, body["count"] as? Int ?? 1)
+            if webView.bounds.width != measuredWidth { measuredWidth = webView.bounds.width; measuredPages = [:] }
+            if measuredPages[spineIndex] != pageCount { measuredPages[spineIndex] = pageCount }
             let progress = Double(page) / Double(pageCount)
             onPositionChange?(spineIndex, progress)
-            if turnInFlight != nil { completeTurn(chapterChanged: body["start"] as? Bool ?? false) }
+            let isStart = body["start"] as? Bool ?? false
+            if turnInFlight != nil { completeTurn(chapterChanged: isStart) }
+            if curlCommitting { finishCurlCommit(chapterChanged: isStart) }
+            scheduleSettle()
         case "nextChapter":
             nextChapter()
         case "prevChapter":
             prevChapter()
         case "tap":
             switch body["zone"] as? String {
-            case "left": turn(.backward)
-            case "right": turn(.forward)
+            case "left": tapTurn(.backward)
+            case "right": tapTurn(.forward)
             default: withAnimation(.easeInOut(duration: 0.25)) { showChrome.toggle() }
             }
         case "selection":
@@ -341,21 +566,32 @@ final class ReaderContainerView: UIView {
     let webView: WKWebView
     private let snapshotView = UIImageView()
 
-    init(webView: WKWebView) {
+    private let renderer: WKWebView
+    private let curlView: UIView
+
+    init(webView: WKWebView, renderer: WKWebView, curlView: UIView) {
         self.webView = webView
+        self.renderer = renderer
+        self.curlView = curlView
         super.init(frame: .zero)
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(webView)
+        // Renderer sits underneath the visible web view, same size, so it lays out identically.
+        for v in [renderer, webView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+            NSLayoutConstraint.activate([
+                v.leadingAnchor.constraint(equalTo: leadingAnchor),
+                v.trailingAnchor.constraint(equalTo: trailingAnchor),
+                v.topAnchor.constraint(equalTo: topAnchor),
+                v.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+        }
         snapshotView.contentMode = .scaleToFill
         snapshotView.isHidden = true
         snapshotView.isUserInteractionEnabled = true // swallow taps mid-animation
         addSubview(snapshotView)
-        NSLayoutConstraint.activate([
-            webView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            webView.topAnchor.constraint(equalTo: topAnchor),
-            webView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        curlView.frame = bounds
+        curlView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(curlView)
     }
 
     required init?(coder: NSCoder) { fatalError() }
