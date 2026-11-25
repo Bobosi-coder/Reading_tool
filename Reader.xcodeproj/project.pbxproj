@@ -24,12 +24,14 @@
 		A441BFAD57EAE6305BBD6174 /* ReaderScheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FD1B874BF3914F66A8ACE7E /* ReaderScheme.swift */; };
 		C83E026B508F3FF8B8044F34 /* XMLTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCC2CAE894F7A2F2DD0BDA1E /* XMLTree.swift */; };
 		D05A605E77B9B488835E0D77 /* TypographyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDD467A4C1F1A4BE82DE4768 /* TypographyView.swift */; };
+		DA4B81890196B0B3B9CB9DA9 /* FontCollection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20C9C562B4186937BEBE697A /* FontCollection.swift */; };
 		EFE55B0151BE056BD7500F80 /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CB3B64F142AAF298BD5DB14 /* ReaderView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		116FF64414D6F44BC8F1B1EF /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		1A59C8116DE0176BFAA9C288 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		20C9C562B4186937BEBE697A /* FontCollection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontCollection.swift; sourceTree = "<group>"; };
 		3B4388C7568893B2BF8FADBE /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
 		3CB3B64F142AAF298BD5DB14 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
 		599BE75CBB11DF6F6A8EF692 /* FontManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontManager.swift; sourceTree = "<group>"; };
@@ -132,6 +134,7 @@
 		AD1B1DA878103C12714CE322 /* Fonts */ = {
 			isa = PBXGroup;
 			children = (
+				20C9C562B4186937BEBE697A /* FontCollection.swift */,
 				599BE75CBB11DF6F6A8EF692 /* FontManager.swift */,
 				DDD467A4C1F1A4BE82DE4768 /* TypographyView.swift */,
 			);
@@ -238,6 +241,7 @@
 				A349DF68D63EDDCBBB946D15 /* Book.swift in Sources */,
 				0212F0DBB35C1B4E63A27C0C /* BookStore.swift in Sources */,
 				7F89D0485D71EE1896CD8587 /* EPUBParser.swift in Sources */,
+				DA4B81890196B0B3B9CB9DA9 /* FontCollection.swift in Sources */,
 				2DEE7A04EFFE654CD20BA5E2 /* FontManager.swift in Sources */,
 				5C29DD59E6EDF25618E27707 /* LibraryView.swift in Sources */,
 				8F13C4AA1826D45FD3381998 /* ReaderApp.swift in Sources */,

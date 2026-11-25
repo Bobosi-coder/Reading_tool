@@ -25,7 +25,7 @@ struct AskAIView: View {
                         if !quote.isEmpty {
                             Text(quote)
                                 .font(.callout)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.primary.opacity(0.75))
                                 .lineLimit(8)
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)

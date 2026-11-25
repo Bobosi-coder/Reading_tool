@@ -24,6 +24,18 @@ enum ReaderJS {
       if (window.reader) return;
       function post(m){ try { window.webkit.messageHandlers.reader.postMessage(m); } catch(e){} }
 
+      // EPUB chapters rarely declare a viewport; without one WebKit lays out at 980px.
+      (function(){
+        var head = document.head || document.getElementsByTagName('head')[0];
+        if (!head) return;
+        var metas = head.getElementsByTagName('meta');
+        for (var i = metas.length - 1; i >= 0; i--) if (metas[i].getAttribute('name') === 'viewport') metas[i].remove();
+        var m = document.createElement('meta');
+        m.setAttribute('name', 'viewport');
+        m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');
+        head.insertBefore(m, head.firstChild);
+      })();
+
       var R = {
         page: 0, count: 1, W: 0, ready: false,
         cfg: { margin: 36, top: 48, bottom: 52 },
@@ -173,6 +185,19 @@ enum ReaderJS {
           post({ type: 'selection', text: s ? s.toString().trim().slice(0, 200) : '' });
         }, 250);
       });
+
+      // Web fonts can finish loading after the first pagination; re-paginate when the
+      // content width no longer matches the page count.
+      R.check = function(){
+        if (!R.ready || !document.body) return;
+        var sw = Math.max(document.body.scrollWidth, document.documentElement.scrollWidth);
+        var n = Math.max(1, Math.ceil((sw - 2) / R.W));
+        if (n !== R.count) R.relayout();
+      };
+      if (document.fonts) {
+        document.fonts.addEventListener('loadingdone', function(){ setTimeout(R.check, 50); });
+      }
+      [300, 800, 1600, 3000].forEach(function(t){ setTimeout(R.check, t); });
 
       var resizeTimer = null;
       window.addEventListener('resize', function(){

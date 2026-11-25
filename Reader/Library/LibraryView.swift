@@ -51,6 +51,10 @@ struct LibraryView: View {
             case .failure(let error): errorMessage = error.localizedDescription
             }
         }
+        .task { scanDropped() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            scanDropped()
+        }
         .onOpenURL { url in
             if url.pathExtension.lowercased() == "epub" { importBook(url) }
         }
@@ -84,6 +88,11 @@ struct LibraryView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 120)
+    }
+
+    private func scanDropped() {
+        let errors = BookStore.importDroppedFiles(into: context)
+        if !errors.isEmpty { errorMessage = errors.joined(separator: "\n") }
     }
 
     private func importBook(_ url: URL) {

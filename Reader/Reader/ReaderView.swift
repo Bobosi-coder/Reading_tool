@@ -63,6 +63,8 @@ struct ReaderView: View {
 
             if c.showChrome { chrome(c) }
 
+            if showAI { aiPanel(c) }
+
             // Floating shortcut when text is selected (in case the edit menu is dismissed).
             if c.hasSelection && !showAI {
                 VStack {
@@ -87,13 +89,37 @@ struct ReaderView: View {
                 c.showChrome = false
             }
         }
-        .inspector(isPresented: $showAI) {
-            AskAIView(bookTitle: book.title, author: book.author, payload: c.askPayload)
-                .inspectorColumnWidth(min: 320, ideal: 380, max: 480)
-        }
         .onChange(of: c.askPayload?.id) {
-            if c.askPayload != nil { showAI = true }
+            if c.askPayload != nil {
+                withAnimation(.easeOut(duration: 0.25)) { showAI = true }
+            }
         }
+    }
+
+    /// Slide-over panel on the right; the page underneath keeps its layout.
+    private func aiPanel(_ c: ReaderController) -> some View {
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                Color.black.opacity(0.08)
+                    .contentShape(Rectangle())
+                    .onTapGesture { withAnimation(.easeIn(duration: 0.2)) { showAI = false } }
+                VStack(spacing: 0) {
+                    HStack {
+                        Spacer()
+                        Button { withAnimation(.easeIn(duration: 0.2)) { showAI = false } } label: {
+                            Image(systemName: "xmark.circle.fill").font(.title2).foregroundStyle(.secondary)
+                        }
+                        .padding([.top, .trailing], 12)
+                    }
+                    AskAIView(bookTitle: book.title, author: book.author, payload: c.askPayload)
+                }
+                .frame(width: min(440, max(340, geo.size.width * 0.55)))
+                .background(.regularMaterial)
+                .shadow(color: .black.opacity(0.2), radius: 12, x: -2)
+            }
+        }
+        .ignoresSafeArea(edges: [.top, .bottom])
+        .transition(.move(edge: .trailing))
     }
 
     @ViewBuilder

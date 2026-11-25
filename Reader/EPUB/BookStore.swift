@@ -45,6 +45,31 @@ enum BookStore {
         }
     }
 
+    /// Import any .epub / font files dropped into Documents (e.g. via Finder file sharing),
+    /// then remove the originals. Returns error messages for files that failed.
+    @MainActor
+    static func importDroppedFiles(into context: ModelContext) -> [String] {
+        let fm = FileManager.default
+        let items = (try? fm.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)) ?? []
+        var errors: [String] = []
+        for url in items {
+            let ext = url.pathExtension.lowercased()
+            do {
+                if ext == "epub" {
+                    _ = try importEPUB(from: url, into: context)
+                } else if FontManager.allowedExtensions.contains(ext) {
+                    _ = try FontManager.shared.importFont(from: url)
+                } else {
+                    continue
+                }
+                try? fm.removeItem(at: url)
+            } catch {
+                errors.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+            }
+        }
+        return errors
+    }
+
     @MainActor
     static func delete(_ book: Book, from context: ModelContext) {
         try? FileManager.default.removeItem(at: book.folderURL)

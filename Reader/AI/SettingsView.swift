@@ -26,6 +26,7 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     SecureField("API Key", text: $apiKey)
+                        .textContentType(.oneTimeCode) // keep iOS from offering to save it as a password
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     HStack {
@@ -100,9 +101,9 @@ struct SettingsView: View {
         Task {
             do {
                 let reply = try await AIClient().complete([ChatMessage(role: "user", content: "用一句话回复：连接成功")])
-                testResult = "✅ " + reply.trimmed
+                testResult = "连接成功：" + reply.trimmed
             } catch {
-                testResult = "❌ " + error.localizedDescription
+                testResult = "连接失败：" + error.localizedDescription
             }
             testing = false
         }

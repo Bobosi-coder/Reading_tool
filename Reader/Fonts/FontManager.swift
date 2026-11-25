@@ -57,18 +57,34 @@ final class FontManager {
         guard Self.allowedExtensions.contains(ext) else {
             throw NSError(domain: "Font", code: 1, userInfo: [NSLocalizedDescriptionKey: "只支持 .ttf / .otf / .ttc 字体文件"])
         }
-        let dest = Self.fontsDirectory.appendingPathComponent(source.lastPathComponent)
-        if FileManager.default.fileExists(atPath: dest.path) {
-            try FileManager.default.removeItem(at: dest)
+        let fm = FileManager.default
+        var written: [URL] = []
+
+        if ext == "ttc" || ext == "otc" {
+            // WebKit can only use the first face of a collection, so split it into one file per face.
+            let data = try Data(contentsOf: source)
+            let faces = try FontCollection.split(data)
+            let base = source.deletingPathExtension().lastPathComponent
+            for (i, face) in faces.enumerated() {
+                let dest = Self.fontsDirectory.appendingPathComponent("\(base)-\(i).\(face.isCFF ? "otf" : "ttf")")
+                try? fm.removeItem(at: dest)
+                try face.data.write(to: dest)
+                written.append(dest)
+            }
+        } else {
+            let dest = Self.fontsDirectory.appendingPathComponent(source.lastPathComponent)
+            try? fm.removeItem(at: dest)
+            try fm.copyItem(at: source, to: dest)
+            written.append(dest)
         }
-        try FileManager.default.copyItem(at: source, to: dest)
-        let described = Self.describe(url: dest)
+
+        let described = written.flatMap { Self.describe(url: $0) }
         if described.isEmpty {
-            try? FileManager.default.removeItem(at: dest)
+            written.forEach { try? fm.removeItem(at: $0) }
             throw NSError(domain: "Font", code: 2, userInfo: [NSLocalizedDescriptionKey: "无法识别这个字体文件"])
         }
         reload()
-        return Array(Set(described.map(\.family)))
+        return Array(Set(described.map(\.family))).sorted()
     }
 
     func deleteFamily(_ family: String) {

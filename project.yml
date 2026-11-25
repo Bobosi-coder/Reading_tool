@@ -33,6 +33,8 @@ targets:
           - UIInterfaceOrientationPortrait
         LSSupportsOpeningDocumentsInPlace: false
         UIFileSharingEnabled: true
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
         CFBundleDocumentTypes:
           - CFBundleTypeName: EPUB
             CFBundleTypeRole: Viewer

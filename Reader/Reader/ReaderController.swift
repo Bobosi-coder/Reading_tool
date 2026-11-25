@@ -67,6 +67,9 @@ final class ReaderController: NSObject {
         webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.showsVerticalScrollIndicator = false
         webView.allowsLinkPreview = false
+        #if DEBUG
+        webView.isInspectable = true
+        #endif
         webView.onAIAction = { [weak self] action in self?.requestAI(action) }
 
         let left = UISwipeGestureRecognizer(target: self, action: #selector(swipeLeft))
@@ -162,7 +165,9 @@ final class ReaderController: NSObject {
 extension ReaderController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let frag = pendingTarget.fragment.map { "\"\($0.replacingOccurrences(of: "\"", with: ""))\"" } ?? "null"
-        webView.evaluateJavaScript("reader.start({progress: \(pendingTarget.progress), fragment: \(frag)})")
+        webView.evaluateJavaScript("reader.start({progress: \(pendingTarget.progress), fragment: \(frag)})") { _, error in
+            if let error { NSLog("[Reader] start error: \(error)") }
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,

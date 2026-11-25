@@ -190,7 +190,9 @@ struct FontPickerList: View {
                     Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
                 }
             }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 }
 
