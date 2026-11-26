@@ -186,20 +186,29 @@ enum ReaderJS {
       window.reader = R;
       R.ensureStyleLast();
 
-      var hadSelectionAtTouch = false;
-      document.addEventListener('touchstart', function(){
+      // Taps are detected from raw touches: 'click' drops quick repeated taps (double-tap handling).
+      var touch0 = null;
+      document.addEventListener('touchstart', function(e){
         var s = window.getSelection();
-        hadSelectionAtTouch = !!(s && !s.isCollapsed);
+        var t = e.touches[0];
+        touch0 = (e.touches.length === 1 && t) ? {
+          x: t.clientX, y: t.clientY, time: Date.now(),
+          hadSelection: !!(s && !s.isCollapsed),
+          onLink: !!(e.target && e.target.closest && e.target.closest('a[href]'))
+        } : null;
       }, { passive: true, capture: true });
-
-      document.addEventListener('click', function(e){
-        if (!R.ready) return;
-        if (e.target && e.target.closest && e.target.closest('a[href]')) return;
+      document.addEventListener('touchcancel', function(){ touch0 = null; }, { passive: true, capture: true });
+      document.addEventListener('touchend', function(e){
+        var t0 = touch0; touch0 = null;
+        if (!t0 || !R.ready || t0.onLink || t0.hadSelection) return;
+        var t = e.changedTouches[0];
+        if (!t || Date.now() - t0.time > 350) return;
+        if (Math.abs(t.clientX - t0.x) > 12 || Math.abs(t.clientY - t0.y) > 12) return;
         var s = window.getSelection();
-        if (hadSelectionAtTouch || (s && !s.isCollapsed)) { hadSelectionAtTouch = false; return; }
-        var x = e.clientX, W = window.innerWidth;
+        if (s && !s.isCollapsed) return;
+        var x = t.clientX, W = window.innerWidth;
         post({ type: 'tap', zone: x < W * 0.28 ? 'left' : (x > W * 0.72 ? 'right' : 'center') });
-      }, true);
+      }, { passive: true, capture: true });
 
       var selTimer = null;
       document.addEventListener('selectionchange', function(){

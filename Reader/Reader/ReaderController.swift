@@ -42,6 +42,11 @@ enum AIQuickAction: String {
 
 enum TurnDirection { case forward, backward }
 
+struct PageKey: Hashable {
+    let spine: Int
+    let page: Int // -1 = last page of the chapter (count not known yet)
+}
+
 struct SelectionPayload: Identifiable {
     let id = UUID()
     let text: String
@@ -82,11 +87,19 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
     @ObservationIgnored private let pageVC: UIPageViewController
     @ObservationIgnored private var curlPan: UIGestureRecognizer?
     @ObservationIgnored private var swipes: [UISwipeGestureRecognizer] = []
+    /// The page image the curl layer currently rests on.
     @ObservationIgnored private var currentVC: PageImageVC?
-    @ObservationIgnored private var nextVC: PageImageVC?
-    @ObservationIgnored private var prevVC: PageImageVC?
-    @ObservationIgnored private var curlActive = false      // a curl is on screen
-    @ObservationIgnored private var curlCommitting = false  // waiting for the web view to catch up
+    /// Pre-rendered pages around the current one (two each way), so quick successive swipes always have a page.
+    @ObservationIgnored private var pageCache: [PageKey: PageImageVC] = [:]
+    @ObservationIgnored private var rendering: Set<PageKey> = []
+    @ObservationIgnored private var cacheGen = 0
+    @ObservationIgnored private var curlTransitioning = false // finger down / animation running
+    @ObservationIgnored private var curlCommitting = false    // web view not yet on the page the curl shows
+    @ObservationIgnored private var commitTarget: PagePos?
+    @ObservationIgnored private var chapterLoading = false
+    @ObservationIgnored private var lastCurlStart = Date.distantPast
+    /// Turns asked for while a curl was still animating (+ forward, − backward); played as soon as it lands.
+    @ObservationIgnored private var queuedTurns = 0
     @ObservationIgnored private var settleWork: DispatchWorkItem?
 
     // Book-wide page numbers: exact counts for chapters we have laid out, estimates for the rest.
@@ -132,8 +145,10 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
         left.direction = .left
         let right = UISwipeGestureRecognizer(target: self, action: #selector(swipeRight))
         right.direction = .right
-        webView.addGestureRecognizer(left)
-        webView.addGestureRecognizer(right)
+        for s in [left, right] {
+            s.delegate = self
+            webView.addGestureRecognizer(s)
+        }
         swipes = [left, right]
 
         // The page view controller's own pan drives the curl. Move it onto the container so it
@@ -142,6 +157,8 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
         pageVC.dataSource = self
         pageVC.delegate = self
         pageVC.view.isHidden = true
+        // Touches pass through to the web view (taps, selection); the pan lives on the container.
+        pageVC.view.isUserInteractionEnabled = false
         for g in pageVC.gestureRecognizers {
             if g is UITapGestureRecognizer {
                 g.isEnabled = false
@@ -200,7 +217,8 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
     func updateTurnMode() {
         let curl = ReaderSettings.shared.pageTurn == .curl
         curlPan?.isEnabled = curl && !hasSelection
-        swipes.forEach { $0.isEnabled = !curl }
+        // In curl mode the swipes are a fallback for when the curl could not start (page not ready yet).
+        swipes.forEach { $0.isEnabled = true }
         if curl { scheduleSettle() } else { dropNeighbors() }
     }
 
@@ -220,6 +238,7 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
         pendingTarget = (progress, fragment)
         hasSelection = false
         guard let url = ReaderScheme.url(forBookPath: epub.spine[spineIndex].path) else { return }
+        chapterLoading = true
         webView.backgroundColor = UIColor(ReaderSettings.shared.theme.bgColor)
         webView.load(URLRequest(url: url))
     }
@@ -293,20 +312,54 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
     }
 
     private func tapTurn(_ dir: TurnDirection) {
-        if ReaderSettings.shared.pageTurn == .curl, !curlActive,
-           let target = dir == .forward ? nextVC : prevVC {
-            curlActive = true
+        guard ReaderSettings.shared.pageTurn == .curl else { turn(dir); return }
+        guard !curlTransitioning else {
+            queuedTurns = max(-3, min(3, queuedTurns + (dir == .forward ? 1 : -1)))
+            return
+        }
+        if let cur = shownVC, let target = neighbor(of: cur, forward: dir == .forward) {
+            curlTransitioning = true
+            settleWork?.cancel()
             pageVC.view.isHidden = false
             pageVC.setViewControllers([target], direction: dir == .forward ? .forward : .reverse, animated: true) { [weak self] _ in
-                self?.commitCurl(to: target)
+                guard let self else { return }
+                self.curlTransitioning = false
+                self.landed(on: target)
             }
-        } else if !curlActive {
+        } else if !curlCommitting && currentVC?.pos.spine == spineIndex {
+            // Neighbour not rendered yet: animate from a live snapshot instead.
             turn(dir)
+        } else {
+            // Web view still catching up and the page isn't rendered yet: play it once it is.
+            queuedTurns = max(-3, min(3, queuedTurns + (dir == .forward ? 1 : -1)))
         }
     }
 
-    @objc private func swipeLeft() { turn(.forward) }
-    @objc private func swipeRight() { turn(.backward) }
+    private func playQueuedTurn() {
+        guard queuedTurns != 0, !curlTransitioning, let cur = shownVC else { return }
+        let dir: TurnDirection = queuedTurns > 0 ? .forward : .backward
+        guard neighbor(of: cur, forward: dir == .forward) != nil else {
+            // Nothing that way (book edge) and nothing being rendered: give up.
+            if neighborKey(cur.pos, forward: dir == .forward) == nil || rendering.isEmpty { queuedTurns = 0 }
+            return
+        }
+        queuedTurns += queuedTurns > 0 ? -1 : 1
+        tapTurn(dir)
+    }
+
+    @objc private func swipeLeft() { swiped(.forward) }
+    @objc private func swipeRight() { swiped(.backward) }
+
+    private func swiped(_ dir: TurnDirection) {
+        guard ReaderSettings.shared.pageTurn == .curl else { turn(dir); return }
+        // The interactive curl normally handles the gesture; only step in if it didn't start
+        // (page not ready, or the previous curl is still animating — then it's queued).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            guard let self, !self.hasSelection,
+                  Date().timeIntervalSince(self.lastCurlStart) > 0.2 else { return }
+            self.tapTurn(dir)
+        }
+    }
 
     // MARK: - Styling
 
@@ -329,6 +382,7 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
         guard sig != appliedSignature else { return }
         installUserScripts()
         dropNeighbors()
+        currentVC = nil
         measuredPages = [:]
         webView.backgroundColor = UIColor(ReaderSettings.shared.theme.bgColor)
         pageVC.view.backgroundColor = UIColor(ReaderSettings.shared.theme.bgColor)
@@ -351,102 +405,175 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
 
     private func dropNeighbors() {
         settleGen += 1
+        cacheGen += 1
         renderer.cancelAll()
-        nextVC = nil
-        prevVC = nil
+        pageCache = [:]
+        rendering = []
     }
 
-    /// After the page stops moving: snapshot it as the curl's current page and pre-render neighbours.
+    /// The page image under the curl layer, if it matches what the reader should be seeing.
+    private var shownVC: PageImageVC? {
+        guard let cur = currentVC, pageVC.viewControllers?.first === cur else { return nil }
+        let want = curlCommitting ? commitTarget : PagePos(spine: spineIndex, page: page, count: pageCount)
+        guard let want, cur.pos.spine == want.spine, cur.pos.page == want.page else { return nil }
+        return cur
+    }
+
+    private func neighborKey(_ p: PagePos, forward: Bool) -> PageKey? {
+        if forward {
+            if p.page + 1 < p.count { return PageKey(spine: p.spine, page: p.page + 1) }
+            return p.spine + 1 < epub.spine.count ? PageKey(spine: p.spine + 1, page: 0) : nil
+        }
+        if p.page > 0 { return PageKey(spine: p.spine, page: p.page - 1) }
+        guard p.spine > 0 else { return nil }
+        if let c = measuredPages[p.spine - 1] { return PageKey(spine: p.spine - 1, page: c - 1) }
+        return PageKey(spine: p.spine - 1, page: -1) // last page, count unknown yet
+    }
+
+    private func cached(_ k: PageKey) -> PageImageVC? {
+        if k.page >= 0 { return pageCache[k] }
+        return pageCache.values.first { $0.pos.spine == k.spine && $0.pos.page == $0.pos.count - 1 }
+    }
+
+    private func neighbor(of vc: PageImageVC, forward: Bool) -> PageImageVC? {
+        neighborKey(vc.pos, forward: forward).flatMap(cached)
+    }
+
+    /// Keep two rendered pages on each side of the current one; drop the rest.
+    private func refill() {
+        guard ReaderSettings.shared.pageTurn == .curl, let anchor = currentVC else { return }
+        var keep: Set<PageKey> = [PageKey(spine: anchor.pos.spine, page: anchor.pos.page)]
+        for forward in [true, false] {
+            var pos = anchor.pos
+            for _ in 0..<2 {
+                guard let k = neighborKey(pos, forward: forward) else { break }
+                if let hit = cached(k) {
+                    keep.insert(PageKey(spine: hit.pos.spine, page: hit.pos.page))
+                    pos = hit.pos
+                    continue
+                }
+                if !rendering.contains(k) {
+                    rendering.insert(k)
+                    let gen = cacheGen
+                    renderer.render(spine: k.spine, page: k.page) { [weak self] img, rpos in
+                        guard let self, gen == self.cacheGen else { return }
+                        self.rendering.remove(k)
+                        if self.measuredPages[rpos.spine] != rpos.count { self.measuredPages[rpos.spine] = rpos.count }
+                        if let img {
+                            self.pageCache[PageKey(spine: rpos.spine, page: rpos.page)] = PageImageVC(pos: rpos, image: img)
+                        }
+                        self.refill()
+                        self.playQueuedTurn()
+                    }
+                }
+                break
+            }
+        }
+        for k in pageCache.keys where !keep.contains(k) && !(rendering.contains(k)) {
+            if let vc = pageCache[k], vc === currentVC { continue }
+            let near = keep.contains { $0.spine == k.spine && abs($0.page - k.page) <= 2 }
+            if !near { pageCache[k] = nil }
+        }
+    }
+
+    /// After the page stops moving: make sure the curl layer rests on an image of it, then pre-render neighbours.
     private func scheduleSettle() {
         guard ReaderSettings.shared.pageTurn == .curl else { return }
         settleWork?.cancel()
+        let here = PagePos(spine: spineIndex, page: page, count: pageCount)
+        if let cur = currentVC, cur.pos == here, pageVC.viewControllers?.first === cur {
+            refill()
+            measureRemainingChapters()
+            return
+        }
         let work = DispatchWorkItem { [weak self] in self?.settle() }
         settleWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     private func settle() {
-        guard ReaderSettings.shared.pageTurn == .curl, !curlActive, !curlCommitting else { return }
-        dropNeighbors()
+        guard ReaderSettings.shared.pageTurn == .curl, !curlTransitioning, !curlCommitting else { return }
+        settleGen += 1
         let gen = settleGen
         let here = PagePos(spine: spineIndex, page: page, count: pageCount)
         webView.takeSnapshot(with: nil) { [weak self] image, _ in
-            guard let self, gen == self.settleGen, let image else { return }
+            guard let self, gen == self.settleGen, !self.curlTransitioning, !self.curlCommitting, let image else { return }
             let cur = PageImageVC(pos: here, image: image)
             self.currentVC = cur
+            self.pageCache[PageKey(spine: here.spine, page: here.page)] = cur
             self.pageVC.setViewControllers([cur], direction: .forward, animated: false)
-
-            let next: (Int, Int)? = here.page + 1 < here.count ? (here.spine, here.page + 1)
-                : (here.spine + 1 < self.epub.spine.count ? (here.spine + 1, 0) : nil)
-            let prev: (Int, Int)? = here.page > 0 ? (here.spine, here.page - 1)
-                : (here.spine > 0 ? (here.spine - 1, -1) : nil)
-            if let next {
-                self.renderer.render(spine: next.0, page: next.1) { [weak self] img, pos in
-                    guard let self, gen == self.settleGen, let img else { return }
-                    self.nextVC = PageImageVC(pos: pos, image: img)
-                    if self.measuredPages[pos.spine] != pos.count { self.measuredPages[pos.spine] = pos.count }
-                }
-            }
-            if let prev {
-                self.renderer.render(spine: prev.0, page: prev.1) { [weak self] img, pos in
-                    guard let self, gen == self.settleGen, let img else { return }
-                    self.prevVC = PageImageVC(pos: pos, image: img)
-                    if self.measuredPages[pos.spine] != pos.count { self.measuredPages[pos.spine] = pos.count }
-                }
-            }
+            self.refill()
             self.measureRemainingChapters()
         }
     }
 
-    /// Move the real web view to the page the curl landed on, then hide the curl layer.
-    private func commitCurl(to vc: PageImageVC) {
+    /// A curl finished on `vc`: it becomes the current page right away, and the web view follows.
+    private func landed(on vc: PageImageVC) {
+        currentVC = vc
+        pageCache[PageKey(spine: vc.pos.spine, page: vc.pos.page)] = vc
+        commitTarget = vc.pos
         curlCommitting = true
-        let pos = vc.pos
-        if pos.spine == spineIndex {
-            webView.evaluateJavaScript("reader.moved = true; reader.goTo(\(pos.page))")
-        } else {
-            open(spineIndex: pos.spine, progress: pos.count > 0 ? Double(pos.page) / Double(pos.count) : 0)
+        refill()
+        driveWebViewToTarget()
+        if queuedTurns != 0 {
+            DispatchQueue.main.async { [weak self] in self?.playQueuedTurn() }
         }
         let timeout = DispatchWorkItem { [weak self] in
-            guard let self, self.curlCommitting else { return }
+            guard let self, self.curlCommitting, self.commitTarget == vc.pos else { return }
             self.finishCurlCommit(chapterChanged: true)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timeout)
     }
 
+    /// Move the real web view to the page the curl shows (the latest one if several curls queued up).
+    private func driveWebViewToTarget() {
+        guard let t = commitTarget else { return }
+        let progress = t.count > 0 ? Double(t.page) / Double(t.count) : 0
+        if t.spine != spineIndex {
+            open(spineIndex: t.spine, progress: progress)
+        } else if chapterLoading {
+            pendingTarget = (progress, nil)
+        } else {
+            webView.evaluateJavaScript("reader.moved = true; reader.goTo(\(t.page))")
+        }
+    }
+
     private func finishCurlCommit(chapterChanged: Bool) {
+        let target = commitTarget
         DispatchQueue.main.asyncAfter(deadline: .now() + (chapterChanged ? 0.15 : 0.05)) { [weak self] in
-            guard let self, self.curlCommitting else { return }
+            guard let self, self.curlCommitting, self.commitTarget == target else { return }
             self.curlCommitting = false
-            self.curlActive = false
-            self.pageVC.view.isHidden = true
+            self.commitTarget = nil
+            if !self.curlTransitioning { self.pageVC.view.isHidden = true }
             self.scheduleSettle()
         }
     }
 
     func pageViewController(_ pvc: UIPageViewController, viewControllerAfter vc: UIViewController) -> UIViewController? {
-        guard !curlCommitting, vc === currentVC else { return nil }
-        return nextVC
+        guard let vc = vc as? PageImageVC, vc === shownVC else { return nil }
+        return neighbor(of: vc, forward: true)
     }
 
     func pageViewController(_ pvc: UIPageViewController, viewControllerBefore vc: UIViewController) -> UIViewController? {
-        guard !curlCommitting, vc === currentVC else { return nil }
-        return prevVC
+        guard let vc = vc as? PageImageVC, vc === shownVC else { return nil }
+        return neighbor(of: vc, forward: false)
     }
 
     func pageViewController(_ pvc: UIPageViewController, willTransitionTo pending: [UIViewController]) {
-        curlActive = true
+        curlTransitioning = true
+        lastCurlStart = Date()
         settleWork?.cancel()
         pageVC.view.isHidden = false
     }
 
     func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool,
                             previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+        curlTransitioning = false
         if completed, let vc = pvc.viewControllers?.first as? PageImageVC {
-            commitCurl(to: vc)
+            landed(on: vc)
         } else {
-            curlActive = false
-            pageVC.view.isHidden = true
+            queuedTurns = 0
+            if !curlCommitting { pageVC.view.isHidden = true }
         }
     }
 
@@ -464,6 +591,15 @@ final class ReaderController: NSObject, UIPageViewControllerDataSource, UIPageVi
             self.webView.evaluateJavaScript("window.reader && reader.clearSelection()")
             self.hasSelection = false
         }
+    }
+}
+
+// MARK: - Gestures
+
+extension ReaderController: UIGestureRecognizerDelegate {
+    /// Let the fallback swipes run alongside the curl pan and the web view's own recognizers.
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
     }
 }
 
@@ -508,13 +644,25 @@ extension ReaderController: WKScriptMessageHandler {
         case "position":
             page = body["page"] as? Int ?? 0
             pageCount = max(1, body["count"] as? Int ?? 1)
-            if webView.bounds.width != measuredWidth { measuredWidth = webView.bounds.width; measuredPages = [:] }
+            chapterLoading = false
+            if webView.bounds.width != measuredWidth {
+                measuredWidth = webView.bounds.width
+                measuredPages = [:]
+                dropNeighbors()
+                currentVC = nil
+            }
             if measuredPages[spineIndex] != pageCount { measuredPages[spineIndex] = pageCount }
             let progress = Double(page) / Double(pageCount)
             onPositionChange?(spineIndex, progress)
             let isStart = body["start"] as? Bool ?? false
             if turnInFlight != nil { completeTurn(chapterChanged: isStart) }
-            if curlCommitting { finishCurlCommit(chapterChanged: isStart) }
+            if curlCommitting, let t = commitTarget {
+                if t.spine == spineIndex && t.page == page || t.page >= pageCount {
+                    finishCurlCommit(chapterChanged: isStart)
+                } else if t.spine != spineIndex || isStart {
+                    driveWebViewToTarget() // a newer curl landed elsewhere while this one was loading
+                }
+            }
             scheduleSettle()
         case "nextChapter":
             nextChapter()
@@ -643,3 +791,4 @@ struct ReaderWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> ReaderContainerView { controller.container }
     func updateUIView(_ uiView: ReaderContainerView, context: Context) {}
 }
+
