@@ -54,6 +54,9 @@ enum BookStore {
         var errors: [String] = []
         for url in items {
             let ext = url.pathExtension.lowercased()
+            // Skip files still being copied in (modified in the last moment); the watcher retries.
+            if let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+               Date().timeIntervalSince(modified) < 1.5 { continue }
             do {
                 if ext == "epub" {
                     _ = try importEPUB(from: url, into: context)
@@ -75,5 +78,36 @@ enum BookStore {
         try? FileManager.default.removeItem(at: book.folderURL)
         context.delete(book)
         try? context.save()
+    }
+}
+
+/// Watches the Documents folder (Finder / Files drops) while the app is open.
+final class DocumentsWatcher {
+    private var source: DispatchSourceFileSystemObject?
+    private var pending: DispatchWorkItem?
+    private let onChange: () -> Void
+
+    init(onChange: @escaping () -> Void) {
+        self.onChange = onChange
+        let fd = open(BookStore.documents.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .extend], queue: .main)
+        src.setEventHandler { [weak self] in self?.changed() }
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        source = src
+    }
+
+    deinit { source?.cancel() }
+
+    /// Debounced; scans again a little later so a file that was mid-copy gets picked up.
+    private func changed() {
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.onChange()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.onChange() }
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
 }

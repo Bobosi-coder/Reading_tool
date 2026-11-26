@@ -12,6 +12,7 @@ struct LibraryView: View {
     @State private var openBook: Book?
     @State private var showSettings = false
     @State private var bookToDelete: Book?
+    @State private var watcher: DocumentsWatcher?
 
     private let columns = [GridItem(.adaptive(minimum: 128, maximum: 160), spacing: 28, alignment: .top)]
 
@@ -62,7 +63,10 @@ struct LibraryView: View {
             case .failure(let error): errorMessage = error.localizedDescription
             }
         }
-        .task { scanDropped() }
+        .task {
+            scanDropped()
+            if watcher == nil { watcher = DocumentsWatcher { scanDropped() } }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             scanDropped()
         }
