@@ -15,6 +15,7 @@ struct AskAIView: View {
     @State private var task: Task<Void, Never>?
     @State private var handledPayload: UUID?
     @FocusState private var inputFocused: Bool
+    @State private var profiles = AIProfiles.shared
 
     private let followUps = ["用更简单的话说", "讲讲背景", "举个例子", "翻译并解释"]
 
@@ -65,6 +66,7 @@ struct AskAIView: View {
                 Text("《\(bookTitle)》").font(.caption).foregroundStyle(DS.inkSoft).lineLimit(1)
             }
             Spacer()
+            modelMenu
             if !messages.isEmpty {
                 Button { reset() } label: { Image(systemName: "square.and.pencil") }
                     .font(.system(size: 17, weight: .medium))
@@ -82,6 +84,41 @@ struct AskAIView: View {
         .padding(.horizontal, 22)
         .padding(.top, 54)
         .padding(.bottom, 14)
+    }
+
+    /// Switch between saved endpoints without leaving the book.
+    @ViewBuilder
+    private var modelMenu: some View {
+        if profiles.profiles.count > 1 {
+            Menu {
+                ForEach(profiles.profiles) { p in
+                    Button {
+                        profiles.activeID = p.id
+                    } label: {
+                        if profiles.active?.id == p.id {
+                            Label("\(p.name) · \(p.model)", systemImage: "checkmark")
+                        } else {
+                            Text("\(p.name) · \(p.model)")
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(profiles.active?.name ?? "模型").lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
+                }
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(DS.inkSoft)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(DS.hairline.opacity(0.6), in: Capsule())
+            }
+            .disabled(streaming)
+        } else if let p = profiles.active {
+            Text(p.name)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(DS.inkSoft)
+                .lineLimit(1)
+        }
     }
 
     private var quoteCard: some View {
